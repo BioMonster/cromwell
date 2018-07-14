@@ -9,6 +9,8 @@ import cromwell.backend.google.pipelines.v2alpha1.api.ActionBuilder.Labels._
 import cromwell.backend.google.pipelines.v2alpha1.api.ActionBuilder._
 import cromwell.backend.google.pipelines.v2alpha1.api.ActionCommands._
 import cromwell.backend.google.pipelines.v2alpha1.api.{ActionBuilder, ActionFlag}
+import cromwell.filesystems.demo.dos.DemoDosPathBuilder
+import cromwell.filesystems.http.HttpPathBuilder
 import simulacrum.typeclass
 
 import scala.language.implicitConversions
@@ -29,8 +31,10 @@ trait PipelinesParameterConversions {
         Key.InputName -> fileInput.name
       )
 
-      if (fileInput.cloudPath.pathAsString.startsWith("dos://")) {
-        import cromwell.backend.google.pipelines.v2alpha1.api.ActionCommands.ShellPath
+      val cloudPath = fileInput.cloudPath.escape
+      val containerPath = fileInput.containerPath.escape
+
+      if (DemoDosPathBuilder.accepts(cloudPath)) {
         import collection.JavaConverters._
 
         val config = ConfigFactory.load
@@ -38,14 +42,23 @@ trait PipelinesParameterConversions {
         val demoDosCommandTemplate = config.getString("demo.dos.localization.command-template")
         val demoDosMarthaUrl = config.getString("demo.dos.martha.url")
         val demoDosCommand = demoDosCommandTemplate
-          .replace(s"$${dosPath}", fileInput.cloudPath.escape)
-          .replace(s"$${containerPath}", fileInput.containerPath.escape)
+          .replace(s"$${dosPath}", cloudPath)
+          .replace(s"$${containerPath}", containerPath)
         val marthaEnv = Map("MARTHA_URL" -> demoDosMarthaUrl)
         ActionBuilder
           .withImage(demoDosDockerImage)
           .withCommand("/bin/sh", "-c", demoDosCommand)
           .withMounts(mounts)
           .setEnvironment(marthaEnv.asJava)
+          .withLabels(labels)
+          .setEntrypoint("")
+      } else if (HttpPathBuilder.accepts(cloudPath)) {
+        val dockerImage = "google/cloud-sdk:alpine"
+        val command = s"curl --silent --create-dirs --output $containerPath $cloudPath"
+        ActionBuilder
+          .withImage(dockerImage)
+          .withCommand("/bin/sh", "-c", command)
+          .withMounts(mounts)
           .withLabels(labels)
           .setEntrypoint("")
       } else {
